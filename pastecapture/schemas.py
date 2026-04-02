@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-CaptureSource = Literal["paste", "drop"]
+CaptureSource = Literal["paste", "drop", "typed"]
 CaptureKind = Literal["string", "file"]
 
 

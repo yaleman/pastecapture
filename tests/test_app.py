@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from uuid6 import UUID
 
+from pastecapture import storage
 from pastecapture.app import create_app
 
 
@@ -145,6 +146,114 @@ def test_metadata_includes_headers_and_client_ip(tmp_path):
     assert metadata["request_headers"]["x-forwarded-for"] == "203.0.113.10"
     assert metadata["client_ip"] == "testclient"
     assert metadata["item"]["original_relative_path"] == "nested/raw.bin"
+
+
+def test_typed_source_is_stored_as_text(tmp_path):
+    client = TestClient(create_app(capture_dir=tmp_path / "captures"))
+
+    manifest = {
+        "source": "typed",
+        "items": [
+            {
+                "slot": 0,
+                "payload_index": 0,
+                "kind": "string",
+                "mime_type": "text/plain",
+                "text_format": "text/plain",
+            }
+        ],
+    }
+
+    response = client.post(
+        "/api/capture-events",
+        data={"manifest": json.dumps(manifest)},
+        files={"files": ("typed-buffer.txt", b"a[Enter][Shift]", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    stored_item = payload["stored_items"][0]
+    metadata_path = tmp_path / stored_item["metadata_path"]
+    assert (tmp_path / stored_item["stored_path"]).read_text(encoding="utf-8") == "a[Enter][Shift]"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["source"] == "typed"
+
+
+def test_store_capture_retries_transient_write_failure(monkeypatch, tmp_path):
+    calls = {"count": 0}
+    original_write_bytes = Path.write_bytes
+
+    def flaky_write_bytes(self: Path, data: bytes) -> int:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError("transient failure")
+        return original_write_bytes(self, data)
+
+    monkeypatch.setattr(storage, "WRITE_RETRY_DELAYS_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr(Path, "write_bytes", flaky_write_bytes)
+
+    result = storage.store_capture(
+        root=tmp_path / "captures",
+        event_id="event-id",
+        event_time=storage.event_time_from_uuid_ms(1_775_098_447_960),
+        manifest=storage.CaptureManifest(
+            source="typed",
+            items=[
+                storage.CaptureItem(
+                    slot=0,
+                    payload_index=0,
+                    kind="string",
+                    mime_type="text/plain",
+                    text_format="text/plain",
+                )
+            ],
+        ),
+        item=storage.CaptureItem(
+            slot=0,
+            payload_index=0,
+            kind="string",
+            mime_type="text/plain",
+            text_format="text/plain",
+        ),
+        payload=b"typed text",
+        request_headers={},
+        client_host="127.0.0.1",
+    )
+
+    assert calls["count"] == 2
+    assert (tmp_path / result.stored_path).read_text(encoding="utf-8") == "typed text"
+
+
+def test_storage_failure_surfaces_as_non_200(monkeypatch, tmp_path):
+    client = TestClient(create_app(capture_dir=tmp_path / "captures"))
+
+    def always_fail(self: Path, data: bytes) -> int:
+        raise OSError("permanent failure")
+
+    monkeypatch.setattr(storage, "WRITE_RETRY_DELAYS_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr(Path, "write_bytes", always_fail)
+
+    manifest = {
+        "source": "typed",
+        "items": [
+            {
+                "slot": 0,
+                "payload_index": 0,
+                "kind": "string",
+                "mime_type": "text/plain",
+                "text_format": "text/plain",
+            }
+        ],
+    }
+
+    response = client.post(
+        "/api/capture-events",
+        data={"manifest": json.dumps(manifest)},
+        files={"files": ("typed-buffer.txt", b"typed text", "text/plain")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "capture storage failed"
 
 
 def test_app_uses_environment_capture_directory(monkeypatch, tmp_path):

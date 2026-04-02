@@ -67,7 +67,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "paste" | "drop";
+            source: "paste" | "drop" | "typed";
             /** Items */
             items: components["schemas"]["CaptureItem"][];
         };

@@ -1,10 +1,11 @@
 import json
 import mimetypes
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from .schemas import CaptureItem, CaptureManifest
 
@@ -13,11 +14,13 @@ FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 PATH_SPLIT_RE = re.compile(r"[\\\\/]+")
 DEFAULT_CAPTURE_DIR = Path("captures")
 DEFAULT_FRONTEND_DIST_DIR = Path("frontend/dist")
+WRITE_RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2)
 STRING_EXTENSION_MAP = {
     "text/plain": ".txt",
     "text/html": ".html",
     "text/uri-list": ".uri-list.txt",
 }
+T = TypeVar("T")
 
 
 @dataclass(slots=True)
@@ -28,6 +31,23 @@ class StoredCapture:
     original_relative_path: str | None
     mime_type: str | None
     size: int
+
+
+def retry_operation(fn: Callable[[], T]) -> T:
+    last_error: OSError | None = None
+
+    for attempt, delay in enumerate((0.0, *WRITE_RETRY_DELAYS_SECONDS), start=1):
+        if delay > 0:
+            time.sleep(delay)
+
+        try:
+            return fn()
+        except OSError as error:
+            last_error = error
+            if attempt == len(WRITE_RETRY_DELAYS_SECONDS) + 1:
+                break
+
+    raise last_error if last_error is not None else OSError("retry operation failed")
 
 
 def sanitize_component(value: str | None, fallback: str) -> str:
@@ -140,12 +160,12 @@ def store_capture(
     request_headers: dict[str, str],
     client_host: str | None,
 ) -> StoredCapture:
-    root.mkdir(parents=True, exist_ok=True)
+    retry_operation(lambda: root.mkdir(parents=True, exist_ok=True))
 
     base_name = file_name_for_item(event_id, event_time, item)
     file_name = ensure_unique_name(root, base_name)
     file_path = root / file_name
-    file_path.write_bytes(payload)
+    retry_operation(lambda: file_path.write_bytes(payload))
 
     stored_path = display_path(root, file_name)
     metadata_name = f"{file_name}-metadata.json"
@@ -161,7 +181,8 @@ def store_capture(
         size=len(payload),
         source=manifest.source,
     )
-    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+    metadata_json = json.dumps(metadata, indent=2, sort_keys=True)
+    retry_operation(lambda: metadata_path.write_text(metadata_json, encoding="utf-8"))
 
     return StoredCapture(
         stored_path=stored_path,

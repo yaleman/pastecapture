@@ -71,40 +71,43 @@ def create_app(
         headers = request_headers(request.headers)
         client_host = request.client.host if request.client else None
 
-        for payload_index, upload in enumerate(files):
-            item = items_by_payload_index.get(payload_index)
-            if item is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"missing manifest item for payload index {payload_index}",
-                )
+        try:
+            for payload_index, upload in enumerate(files):
+                item = items_by_payload_index.get(payload_index)
+                if item is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"missing manifest item for payload index {payload_index}",
+                    )
 
-            payload = await upload.read()
-            if item.original_name is None and upload.filename:
-                item = item.model_copy(update={"original_name": upload.filename})
-            if item.mime_type is None and upload.content_type:
-                item = item.model_copy(update={"mime_type": upload.content_type})
+                payload = await upload.read()
+                if item.original_name is None and upload.filename:
+                    item = item.model_copy(update={"original_name": upload.filename})
+                if item.mime_type is None and upload.content_type:
+                    item = item.model_copy(update={"mime_type": upload.content_type})
 
-            stored_capture = store_capture(
-                root=request.app.state.capture_root,
-                event_id=event_id,
-                event_time=received_at,
-                manifest=manifest,
-                item=item,
-                payload=payload,
-                request_headers=headers,
-                client_host=client_host,
-            )
-            stored_items.append(
-                StoredItemResponse(
-                    stored_path=stored_capture.stored_path,
-                    metadata_path=stored_capture.metadata_path,
-                    original_name=stored_capture.original_name,
-                    original_relative_path=stored_capture.original_relative_path,
-                    mime_type=stored_capture.mime_type,
-                    size=stored_capture.size,
+                stored_capture = store_capture(
+                    root=request.app.state.capture_root,
+                    event_id=event_id,
+                    event_time=received_at,
+                    manifest=manifest,
+                    item=item,
+                    payload=payload,
+                    request_headers=headers,
+                    client_host=client_host,
                 )
-            )
+                stored_items.append(
+                    StoredItemResponse(
+                        stored_path=stored_capture.stored_path,
+                        metadata_path=stored_capture.metadata_path,
+                        original_name=stored_capture.original_name,
+                        original_relative_path=stored_capture.original_relative_path,
+                        mime_type=stored_capture.mime_type,
+                        size=stored_capture.size,
+                    )
+                )
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="capture storage failed") from error
 
         return CaptureEventResponse(event_id=event_id, stored_items=stored_items)
 
