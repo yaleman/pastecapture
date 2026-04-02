@@ -1,0 +1,24 @@
+[tools]
+node = "latest"
+pnpm = "latest"
+uv = "latest"
+
+[tasks.frontend-build]
+description = "Build the frontend bundle"
+run = "pnpm --dir frontend build"
+
+[tasks.ruff]
+description = "Run Ruff checks"
+run = "uv run ruff check"
+
+[tasks.ty]
+description = "Run ty type checks"
+run = "uv run ty check"
+
+[tasks.pytest]
+description = "Run Python tests"
+run = "uv run pytest -q"
+
+[tasks.start]
+description = "Start the pastecapture server"
+run = "uv run pastecapture --capture-dir ./captures"
